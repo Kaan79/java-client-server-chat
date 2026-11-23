@@ -5,97 +5,144 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ChatServer {
+
     private static final int PORT = 5000;
-    private static final Map<String, ClientHandler> clients = new ConcurrentHashMap<>();
+
+    private static final Map<Socket, ClientHandler> clients =
+            new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
-        System.out.println("Chat server starting on port " + PORT + "...");
+        System.out.println("Chat server is starting...");
+
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-            System.out.println("Server is running. Waiting for clients...");
+            System.out.println("Server started on port " + PORT);
+            System.out.println("Waiting for clients...");
+
             while (true) {
                 Socket socket = serverSocket.accept();
-                System.out.println("New client connected: " + socket.getRemoteSocketAddress());
-                Thread thread = new Thread(new ClientHandler(socket));
+                System.out.println("New connection: " + socket.getRemoteSocketAddress());
+
+                ClientHandler handler = new ClientHandler(socket);
+                clients.put(socket, handler);
+
+                Thread thread = new Thread(handler);
                 thread.start();
             }
+
         } catch (IOException e) {
-            System.err.println("Server error: " + e.getMessage());
+            System.out.println("Server error: " + e.getMessage());
         }
     }
 
-    private static void broadcast(String message, String excludedNickname) {
-        for (Map.Entry<String, ClientHandler> entry : clients.entrySet()) {
-            if (!entry.getKey().equals(excludedNickname)) {
-                entry.getValue().send(message);
+    private static void broadcast(String message, Socket sender) {
+        for (Map.Entry<Socket, ClientHandler> entry : clients.entrySet()) {
+            if (!entry.getKey().equals(sender)) {
+                entry.getValue().sendMessage(message);
             }
         }
+    }
+
+    private static void removeClient(Socket socket) {
+        ClientHandler handler = clients.remove(socket);
+
+        if (handler != null && handler.getNickname() != null) {
+            broadcast(handler.getNickname() + " left the chat.", socket);
+        }
+
+        System.out.println("Client disconnected.");
     }
 
     private static class ClientHandler implements Runnable {
+
         private final Socket socket;
+        private BufferedReader input;
         private PrintWriter output;
         private String nickname;
 
-        ClientHandler(Socket socket) {
+        public ClientHandler(Socket socket) {
             this.socket = socket;
         }
 
         @Override
         public void run() {
-            try (Socket clientSocket = socket;
-                 BufferedReader input = new BufferedReader(
-                         new InputStreamReader(clientSocket.getInputStream()));
-                 PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)) {
+            try (Socket client = socket;
+                 BufferedReader reader = new BufferedReader(
+                         new InputStreamReader(client.getInputStream()));
+                 PrintWriter writer = new PrintWriter(
+                         client.getOutputStream(), true)) {
+
+                input = reader;
                 output = writer;
-                String registration = input.readLine();
-                if (registration == null || !registration.startsWith("NICK ")) {
-                    send("ERROR: Send NICK <nickname> first.");
-                    return;
-                }
-
-                nickname = registration.substring(5).trim();
-                if (nickname.isEmpty() || clients.putIfAbsent(nickname, this) != null) {
-                    send("ERROR: Nickname is empty or already in use.");
-                    return;
-                }
-
-                send("Welcome, " + nickname + "! Type /quit to leave.");
-                broadcast("[SERVER] " + nickname + " joined the chat.", nickname);
-                System.out.println(nickname + " joined.");
 
                 String line;
+
                 while ((line = input.readLine()) != null) {
-                    if (line.equalsIgnoreCase("QUIT")) {
+                    if (line.startsWith("NICK ")) {
+                        handleNickname(line.substring(5).trim());
+                    } else if (line.startsWith("MSG ")) {
+                        handleMessage(line.substring(4));
+                    } else if (line.equals("QUIT")) {
+                        output.println("OK Goodbye");
                         break;
-                    }
-                    if (line.startsWith("MSG ")) {
-                        String message = line.substring(4).trim();
-                        if (!message.isEmpty()) {
-                            String formatted = nickname + ": " + message;
-                            System.out.println(formatted);
-                            broadcast(formatted, nickname);
-                        }
+                    } else {
+                        output.println("ERROR Unknown command");
                     }
                 }
+
             } catch (IOException e) {
-                System.out.println("Connection error for " + nickname + ": " + e.getMessage());
+                System.out.println("Connection ended: " + e.getMessage());
             } finally {
-                if (nickname != null && clients.remove(nickname, this)) {
-                    broadcast("[SERVER] " + nickname + " left the chat.", nickname);
-                    System.out.println(nickname + " left.");
-                }
+                removeClient(socket);
             }
         }
 
-        void send(String message) {
-            PrintWriter writer = output;
-            if (writer != null) {
-                writer.println(message);
+        private void handleNickname(String requestedNickname) {
+            if (requestedNickname.isEmpty()) {
+                output.println("ERROR Nickname cannot be empty");
+                return;
             }
+
+            for (ClientHandler client : clients.values()) {
+                if (client != this &&
+                        requestedNickname.equalsIgnoreCase(client.getNickname())) {
+                    output.println("ERROR Nickname already taken");
+                    return;
+                }
+            }
+
+            nickname = requestedNickname;
+            output.println("OK Nickname set to " + nickname);
+            System.out.println(nickname + " joined the chat.");
+        }
+
+        private void handleMessage(String message) {
+            if (nickname == null) {
+                output.println("ERROR Set your nickname first using NICK");
+                return;
+            }
+
+            if (message.trim().isEmpty()) {
+                output.println("ERROR Message cannot be empty");
+                return;
+            }
+
+            output.println("OK Message received");
+            System.out.println(nickname + ": " + message);
+
+            broadcast(nickname + ": " + message, socket);
+        }
+
+        public void sendMessage(String message) {
+            if (output != null) {
+                output.println(message);
+            }
+        }
+
+        public String getNickname() {
+            return nickname;
         }
     }
 }
