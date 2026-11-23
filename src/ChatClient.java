@@ -5,6 +5,7 @@ import java.io.PrintWriter;
 import java.net.Socket;
 
 public class ChatClient {
+
     private static final String HOST = "localhost";
     private static final int PORT = 5000;
 
@@ -12,12 +13,14 @@ public class ChatClient {
         try (Socket socket = new Socket(HOST, PORT);
              BufferedReader serverInput = new BufferedReader(
                      new InputStreamReader(socket.getInputStream()));
-             PrintWriter serverOutput = new PrintWriter(socket.getOutputStream(), true);
+             PrintWriter serverOutput = new PrintWriter(
+                     socket.getOutputStream(), true);
              BufferedReader keyboard = new BufferedReader(
                      new InputStreamReader(System.in))) {
 
             System.out.println("Connected to the chat server.");
             System.out.print("Enter your nickname: ");
+
             String nickname = keyboard.readLine();
 
             if (nickname == null || nickname.trim().isEmpty()) {
@@ -25,39 +28,50 @@ public class ChatClient {
                 return;
             }
 
-            serverOutput.println("NICK " + nickname.trim());
+            serverOutput.println("NICK " + nickname);
+
             String response = serverInput.readLine();
-            if (response == null) {
-                System.out.println("Server closed the connection.");
+            System.out.println(response);
+
+            if (response == null || !response.startsWith("OK ")) {
                 return;
             }
-            System.out.println(response);
 
             Thread receiver = new Thread(() -> {
                 try {
                     String message;
+
                     while ((message = serverInput.readLine()) != null) {
-                        System.out.println(message);
+                        System.out.println("\n" + message);
+                        System.out.print("> ");
                     }
+
                 } catch (IOException e) {
-                    System.out.println("Disconnected from server.");
+                    System.out.println("Connection to server closed.");
                 }
             });
+
             receiver.setDaemon(true);
             receiver.start();
 
+            System.out.println("Type messages and press Enter.");
+            System.out.println("Type /quit to leave the chat.");
+
             String message;
+
             while ((message = keyboard.readLine()) != null) {
                 if (message.equalsIgnoreCase("/quit")) {
                     serverOutput.println("QUIT");
                     break;
                 }
-                if (!message.trim().isEmpty()) {
-                    serverOutput.println("MSG " + message);
-                }
+
+                serverOutput.println("MSG " + message);
             }
+
         } catch (IOException e) {
-            System.err.println("Could not connect to the chat server: " + e.getMessage());
+            System.out.println("Connection error: " + e.getMessage());
         }
+
+        System.out.println("Disconnected from chat.");
     }
 }
